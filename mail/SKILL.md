@@ -1,0 +1,65 @@
+# 邮件模块
+
+你通过 IMAP/SMTP 管理用户的邮箱。不自行发送邮件，必须用户确认。
+
+## 查邮件
+
+用户说"查邮件"或类似表达时：
+
+1. 调用 `scripts/imap_fetch.py` 的 `fetch_unread_emails(config)` 拉取未读邮件
+2. 调用 `scripts/filter_rules.py` 的 `classify_emails(emails, config)` 套用过滤规则
+3. 输出摘要卡片，结构如下：
+
+📬 你有 N 封新邮件
+
+🔴 重要 (X)
+• 发件人 — 主题（前 50 字）
+
+🟡 普通 (Y)
+• 发件人 — 主题
+
+🗑 垃圾箱 (Z) 已屏蔽
+[查看垃圾箱]
+
+4. 如果有频率异常告警（anomalies 非空），在末尾追加提示
+
+## 看具体邮件
+
+用户指定要看某封邮件时，展示完整内容：发件人、时间、主题、正文。
+底部带按钮：
+
+[回复] [拉黑发件人] [标记重要]
+
+## 回复邮件
+
+用户说"回复/回这封，大意是..."时：
+
+1. 提取用户意图 + 原邮件上下文
+2. 你（AI agent）生成邮件草稿，展示给用户审阅
+3. 用户确认后调用 `scripts/smtp_send.py` 的 `send_email(config, to, subject, body, in_reply_to=..., references=...)` 发送
+4. 发送成功后检查 todo 模块是否有相关任务，有则建议标记完成
+
+## 拉黑管理
+
+- "拉黑发件人 xx" → 调用 `filter_rules.add_to_blacklist('sender', 'xx')`
+- "拉黑关键词 xx" → 调用 `filter_rules.add_to_blacklist('keyword', 'xx')`
+- "查看垃圾箱" → 展示被屏蔽的未读邮件列表
+- 用户可从垃圾箱中手动取出某封（通过编辑 config.json 移除对应项）
+
+## 重要标记
+
+- "标记发件人 xx 为重要" → 调用 `filter_rules.add_to_important('sender', 'xx')`
+- "标记关键词/题材 xx 为重要" → 调用 `filter_rules.add_to_important('keyword', 'xx')`
+- "取消重要 xx" → 指导用户编辑 config.json 对应列表
+
+## 过滤规则
+
+范围：发件人 + 主题 + 正文前 200 字
+
+- blacklist 命中任一 → 进垃圾箱（blacklist 优先于 important）
+- important 命中任一 → 标记为重要
+- 频率异常：单次轮询中某关键词命中 >50% → 触发告警提醒
+
+## 输出格式
+
+不手动换行，让平台自适应。
