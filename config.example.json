@@ -1,17 +1,37 @@
 {
   "mail": {
-    "imap": {
-      "server": "imap.example.com",
-      "port": 993,
-      "username": "your-email@example.com",
-      "password_env": "MAIL_PASSWORD"
-    },
-    "smtp": {
-      "server": "smtp.example.com",
-      "port": 587,
-      "username": "your-email@example.com",
-      "password_env": "MAIL_PASSWORD"
-    },
+    "accounts": [
+      {
+        "label": "工作",
+        "imap": {
+          "server": "imap.example.com",
+          "port": 993,
+          "username": "you@work.com",
+          "password_env": "MAIL_PASSWORD_WORK"
+        },
+        "smtp": {
+          "server": "smtp.example.com",
+          "port": 587,
+          "username": "you@work.com",
+          "password_env": "MAIL_PASSWORD_WORK"
+        }
+      },
+      {
+        "label": "个人",
+        "imap": {
+          "server": "imap.example.com",
+          "port": 993,
+          "username": "you@personal.com",
+          "password_env": "MAIL_PASSWORD_PERSONAL"
+        },
+        "smtp": {
+          "server": "smtp.example.com",
+          "port": 587,
+          "username": "you@personal.com",
+          "password_env": "MAIL_PASSWORD_PERSONAL"
+        }
+      }
+    ],
     "poll_interval_minutes": 5,
     "filters": {
       "important_senders": [],

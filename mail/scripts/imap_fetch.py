@@ -48,20 +48,17 @@ def _extract_body(msg: email.message.Message) -> str:
     return "\n".join(body_parts)
 
 
-def fetch_unread_emails(config: dict) -> list[dict]:
+def fetch_unread_emails_for_account(imap_cfg: dict) -> list[dict]:
     """
-    Connect to IMAP server and fetch all unread emails.
+    Connect to a single IMAP account and fetch all unread emails.
+    imap_cfg: {server, port, username, password}
     Returns list of dicts: {sender, subject, body, uid, date}
     """
-    mail_config = config["mail"]
-    imap_cfg = mail_config["imap"]
-
     conn = imaplib.IMAP4_SSL(imap_cfg["server"], imap_cfg["port"])
     try:
         conn.login(imap_cfg["username"], imap_cfg["password"])
         conn.select("INBOX")
 
-        # Search for unread messages
         status, message_ids = conn.search(None, "UNSEEN")
         if status != "OK" or not message_ids[0]:
             return []
@@ -88,3 +85,48 @@ def fetch_unread_emails(config: dict) -> list[dict]:
         return emails
     finally:
         conn.logout()
+
+
+def fetch_all_unread_emails(config: dict) -> dict[str, list[dict]]:
+    """
+    Fetch unread emails from all configured accounts.
+    Returns dict: {account_label: [email_dicts]}
+    Each email dict includes an extra 'account' field with the label.
+    """
+    accounts = config.get("mail", {}).get("accounts", [])
+    result = {}
+    for account in accounts:
+        label = account.get("label", account["imap"]["username"])
+        imap_cfg = account["imap"]
+        try:
+            emails = fetch_unread_emails_for_account(imap_cfg)
+            for e in emails:
+                e["account"] = label
+            result[label] = emails
+        except Exception as e:
+            print(f"Failed to fetch from {label}: {e}")
+            result[label] = []
+    return result
+
+
+def fetch_unread_emails(config: dict) -> list[dict]:
+    """
+    Legacy wrapper: fetch from all accounts and return flat list.
+    Each email has an 'account' field.
+    """
+    all_emails = {}
+    accounts = config.get("mail", {}).get("accounts", [])
+    if accounts:
+        all_emails = fetch_all_unread_emails(config)
+    else:
+        # Fallback: single-account old config format
+        imap_cfg = config["mail"]["imap"]
+        label = config["mail"].get("label", imap_cfg.get("username", "default"))
+        all_emails[label] = fetch_unread_emails_for_account(imap_cfg)
+
+    flat = []
+    for account_label, emails in all_emails.items():
+        for e in emails:
+            e["account"] = account_label
+        flat.extend(emails)
+    return flat

@@ -1,31 +1,41 @@
 # 邮件模块
 
-你通过 IMAP/SMTP 管理用户的邮箱。不自行发送邮件，必须用户确认。
+你通过 IMAP/SMTP 管理用户的多邮箱。不自行发送邮件，必须用户确认。
+
+## 多账户
+
+config 的 `mail.accounts` 是一个数组，每个账户有 `label`（如"工作"、"个人"）、独立的 IMAP/SMTP 配置。
 
 ## 查邮件
 
 用户说"查邮件"或类似表达时：
 
-1. 调用 `scripts/imap_fetch.py` 的 `fetch_unread_emails(config)` 拉取未读邮件
-2. 调用 `scripts/filter_rules.py` 的 `classify_emails(emails, config)` 套用过滤规则
-3. 输出摘要卡片，结构如下：
+1. 调用 `scripts/imap_fetch.py` 的 `fetch_unread_emails(config)` 拉取所有账户未读邮件（每封邮件带 `account` 字段）
+2. 调用 `scripts/filter_rules.py` 的 `classify_emails(emails, config)` 套用过滤规则（全局 filters 对所有账户生效）
+3. 输出摘要卡片，按账户分组：
 
-📬 你有 N 封新邮件
+📬 工作 — 3 封新邮件
 
-🔴 重要 (X)
-• 发件人 — 主题（前 50 字）
-
-🟡 普通 (Y)
+🔴 重要 (1)
 • 发件人 — 主题
 
-🗑 垃圾箱 (Z) 已屏蔽
-[查看垃圾箱]
+🟡 普通 (2)
+• 发件人 — 主题
+
+📬 个人 — 1 封新邮件
+
+🟡 普通 (1)
+• 发件人 — 主题
+
+🗑 垃圾箱 (Z) 已屏蔽 [查看垃圾箱]
 
 4. 如果有频率异常告警（anomalies 非空），在末尾追加提示
 
+用户也可指定账户："查工作邮箱" → 只拉取 label 匹配的账户
+
 ## 看具体邮件
 
-用户指定要看某封邮件时，展示完整内容：发件人、时间、主题、正文。
+用户指定要看某封邮件时，展示完整内容：发件人、时间、主题、正文，标注所属账户。
 底部带按钮：
 
 [回复] [拉黑发件人] [标记重要]
@@ -36,7 +46,7 @@
 
 1. 提取用户意图 + 原邮件上下文
 2. 你（AI agent）生成邮件草稿，展示给用户审阅
-3. 用户确认后调用 `scripts/smtp_send.py` 的 `send_email(config, to, subject, body, in_reply_to=..., references=...)` 发送
+3. 用户确认后调用 `scripts/smtp_send.py` 的 `send_email(config, to, subject, body, from_account_label=..., in_reply_to=...)` 发送。`from_account_label` 默认用收到该邮件的账户
 4. 发送成功后检查 todo 模块是否有相关任务，有则建议标记完成
 
 ## 拉黑管理
