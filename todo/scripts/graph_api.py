@@ -1,6 +1,7 @@
 """Microsoft Graph API client for Microsoft To Do tasks."""
 import json
 import sys
+import time
 from pathlib import Path
 
 import requests
@@ -17,8 +18,12 @@ def _get_token(config: dict) -> str:
     """Get a valid access token, refreshing if needed."""
     if TOKEN_FILE.exists():
         cached = json.loads(TOKEN_FILE.read_text())
-        if cached.get("access_token"):
-            return cached["access_token"]
+        access_token = cached.get("access_token")
+        expires_at = cached.get("expires_at")
+        if access_token and expires_at:
+            # Reuse if still valid with a 60-second safety buffer
+            if time.time() < expires_at - 60:
+                return access_token
 
     ms_cfg = config["todo"]["microsoft_graph"]
     token_url = AUTH_URL.format(tenant=ms_cfg["tenant_id"])
@@ -31,6 +36,7 @@ def _get_token(config: dict) -> str:
     resp = requests.post(token_url, data=payload, timeout=30)
     resp.raise_for_status()
     token_data = resp.json()
+    token_data["expires_at"] = time.time() + token_data["expires_in"]
     TOKEN_FILE.write_text(json.dumps(token_data))
     return token_data["access_token"]
 
