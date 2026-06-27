@@ -1,0 +1,37 @@
+{
+  "mail": {
+    "imap": {
+      "server": "imap.example.com",
+      "port": 993,
+      "username": "your-email@example.com",
+      "password_env": "MAIL_PASSWORD"
+    },
+    "smtp": {
+      "server": "smtp.example.com",
+      "port": 587,
+      "username": "your-email@example.com",
+      "password_env": "MAIL_PASSWORD"
+    },
+    "poll_interval_minutes": 5,
+    "filters": {
+      "important_senders": [],
+      "important_keywords": [],
+      "blacklist_senders": [],
+      "blacklist_keywords": []
+    }
+  },
+  "digest": {
+    "group_chat_id": -1001234567890,
+    "morning_time": "08:00",
+    "evening_time": "22:00",
+    "escalation_keywords": ["报错", "失败", "冲突", "不同意"]
+  },
+  "todo": {
+    "microsoft_graph": {
+      "client_id_env": "MS_CLIENT_ID",
+      "client_secret_env": "MS_CLIENT_SECRET",
+      "tenant_id_env": "MS_TENANT_ID",
+      "redirect_uri": "http://localhost:8400/auth/callback"
+    }
+  }
+}
