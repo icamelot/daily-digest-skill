@@ -1,0 +1,18 @@
+# User's real config (contains secrets)
+config.json
+
+# Microsoft Graph token cache
+.ms_token.json
+todo/.ms_token.json
+
+# Digest timestamp markers
+.digest_markers/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.idea/
+.vscode/
