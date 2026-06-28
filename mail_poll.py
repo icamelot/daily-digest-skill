@@ -24,7 +24,7 @@ MAX_SEEN_PER_ACCOUNT = 5000
 
 # Telegram direct send — credentials from environment
 TG_TOKEN = os.environ.get("DUCTOR_TG_TOKEN", "")
-TG_CHAT_ID = os.environ.get("DUCTOR_TG_CHAT_ID", "7739164762")
+TG_CHAT_ID = os.environ.get("DUCTOR_TG_CHAT_ID", "")
 TG_API = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
 
 
