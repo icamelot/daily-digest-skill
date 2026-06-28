@@ -142,7 +142,7 @@ def _post_to_agent(emails: list[dict]) -> bool:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=120) as resp:
             result = json.loads(resp.read().decode())
             return result.get("success", False)
     except Exception as e:
