@@ -174,7 +174,7 @@ def _format_and_send(emails: list[dict], config: dict) -> bool:
     if normal:
         keyboard = json.dumps({
             "inline_keyboard": [[
-                {"text": "✅ 一键已读", "callback_data": "mail:mark-normal-read"}
+                {"text": "✅ 一键已读", "callback_data": "mail:mark-all-read"}
             ]]
         })
 
@@ -252,8 +252,8 @@ def main():
         time.sleep(300)
 
 
-def mark_normal_read():
-    """Mark all normal (non-important, non-verification) unread emails as read."""
+def mark_all_read():
+    """Mark ALL unread emails as read across all accounts."""
     import imaplib as _imaplib
     with open(CONFIG_PATH) as f:
         config = json.load(f)
@@ -276,56 +276,11 @@ def mark_normal_read():
                 pass
             conn.select("INBOX")
 
-            # Fetch all UNSEEN in this account, classify, mark normals
             status, msg_ids = conn.search(None, "UNSEEN")
-            if status != "OK" or not msg_ids[0]:
-                conn.logout()
-                continue
-
-            # Fetch full emails for accurate classification (verification codes need body)
-            emails = []
-            for msg_id in msg_ids[0].split():
-                s, data = conn.fetch(msg_id, "(BODY.PEEK[])")
-                if s != "OK":
-                    continue
-                for part in data:
-                    if isinstance(part, tuple):
-                        import email as _email
-                        from filter_rules import _strip_html
-                        msg = _email.message_from_bytes(part[1])
-                        # Extract plain text body
-                        body_text = ""
-                        body_parts = []
-                        if msg.is_multipart():
-                            for sub in msg.walk():
-                                if sub.get_content_type() == "text/plain":
-                                    p = sub.get_payload(decode=True)
-                                    if p:
-                                        body_parts.append(p.decode(errors="replace"))
-                        else:
-                            p = msg.get_payload(decode=True)
-                            if p:
-                                body_parts.append(p.decode(errors="replace"))
-                        body_text = _strip_html(" ".join(body_parts))
-                        emails.append({
-                            "uid": msg_id.decode(),
-                            "sender": msg.get("From", ""),
-                            "subject": msg.get("Subject", "") or "",
-                            "body": body_text,
-                            "account": label,
-                        })
-                        break
-
-            if not emails:
-                conn.logout()
-                continue
-
-            result = classify_emails(emails, config)
-            normal = result.get("normal", [])
-            if normal:
-                for e in normal:
+            if status == "OK" and msg_ids[0]:
+                for msg_id in msg_ids[0].split():
                     try:
-                        conn.store(e["uid"], "+FLAGS", "(\\Seen)")
+                        conn.store(msg_id.decode(), "+FLAGS", "(\\Seen)")
                         total_marked += 1
                     except _imaplib.IMAP4.error:
                         pass
@@ -334,21 +289,11 @@ def mark_normal_read():
         except Exception as e:
             print(f"标记 {label} 失败: {e}")
 
-    # Remove read emails from seen file
-    seen = _load_seen()
-    # Rebuild seen: remove entries that are now \Seen
-    for account in config["mail"]["accounts"]:
-        label = account["label"]
-        if label in seen:
-            # Keep only non-normal UIDs (we don't know which are which,
-            # so clean sweep — next poll will re-record unseen ones)
-            pass  # seen_uids will naturally phase out as emails become \Seen
-
-    print(f"已标记 {total_marked} 封普通邮件为已读")
+    print(f"已标记 {total_marked} 封邮件为已读")
 
 
 if __name__ == "__main__":
-    if "--mark-normal-read" in sys.argv:
-        mark_normal_read()
+    if "--mark-all-read" in sys.argv:
+        mark_all_read()
     else:
         main()
