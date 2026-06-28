@@ -282,21 +282,36 @@ def mark_normal_read():
                 conn.logout()
                 continue
 
-            # Fetch headers for all unread to classify
+            # Fetch full emails for accurate classification (verification codes need body)
             emails = []
             for msg_id in msg_ids[0].split():
-                s, data = conn.fetch(msg_id, "(BODY.PEEK[HEADER])")
+                s, data = conn.fetch(msg_id, "(BODY.PEEK[])")
                 if s != "OK":
                     continue
                 for part in data:
                     if isinstance(part, tuple):
                         import email as _email
+                        from filter_rules import _strip_html
                         msg = _email.message_from_bytes(part[1])
+                        # Extract plain text body
+                        body_text = ""
+                        body_parts = []
+                        if msg.is_multipart():
+                            for sub in msg.walk():
+                                if sub.get_content_type() == "text/plain":
+                                    p = sub.get_payload(decode=True)
+                                    if p:
+                                        body_parts.append(p.decode(errors="replace"))
+                        else:
+                            p = msg.get_payload(decode=True)
+                            if p:
+                                body_parts.append(p.decode(errors="replace"))
+                        body_text = _strip_html(" ".join(body_parts))
                         emails.append({
                             "uid": msg_id.decode(),
                             "sender": msg.get("From", ""),
                             "subject": msg.get("Subject", "") or "",
-                            "body": "",
+                            "body": body_text,
                             "account": label,
                         })
                         break
