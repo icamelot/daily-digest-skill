@@ -42,6 +42,22 @@ class _IMAP4_SSL_DoH(imaplib.IMAP4_SSL):
         return ctx.wrap_socket(sock, server_hostname=self._sni_host)
 
 
+def _extract_attachment_metadata(msg: email.message.Message) -> list[dict]:
+    """Walk MIME tree and collect attachment metadata (no body content)."""
+    attachments = []
+    if msg.is_multipart():
+        for part in msg.walk():
+            disp = (part.get("Content-Disposition") or "").lower()
+            if "attachment" in disp:
+                filename = part.get_filename() or "unnamed"
+                attachments.append({
+                    "filename": _decode_header_value(filename),
+                    "mime_type": part.get_content_type(),
+                    "size": len(part.get_payload(decode=True) or b""),
+                })
+    return attachments
+
+
 def _decode_header_value(value: Any) -> str:
     """Decode email header value to string."""
     if value is None:
@@ -128,6 +144,7 @@ def fetch_unread_emails_for_account(imap_cfg: dict) -> list[dict]:
                         "subject": _decode_header_value(msg.get("Subject", "")),
                         "date": _decode_header_value(msg.get("Date", "")),
                         "body": _extract_body(msg),
+                        "attachments": _extract_attachment_metadata(msg),
                     })
                     break
 
