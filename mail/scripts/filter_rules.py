@@ -26,6 +26,18 @@ def _matches_keywords(text: str, keywords: list[str]) -> list[str]:
     return [kw for kw in keywords if kw.lower() in text_lower]
 
 
+def _strip_html(text: str) -> str:
+    """Remove HTML tags, CSS, and excessive whitespace for code extraction."""
+    import re as _re
+    # Remove style/script blocks
+    text = _re.sub(r"<(style|script)[^>]*>.*?</\1>", " ", text, flags=_re.DOTALL | _re.IGNORECASE)
+    # Remove HTML tags
+    text = _re.sub(r"<[^>]+>", " ", text)
+    # Collapse whitespace
+    text = _re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
 def extract_verification_code(email: dict) -> str | None:
     """
     Detect if an email contains a verification code and extract it.
@@ -40,10 +52,13 @@ def extract_verification_code(email: dict) -> str | None:
     if not has_verification_kw:
         return None
 
-    # Extract potential codes from body (first 1000 chars, codes are usually early)
-    matches = _VERIFICATION_CODE_RE.findall(body[:1000])
+    # Strip HTML before searching for codes
+    clean_body = _strip_html(body)
+
+    # Extract potential codes from cleaned body
+    matches = _VERIFICATION_CODE_RE.findall(clean_body[:2000])
     if matches:
-        # Return the first plausible code (skip obvious years like 2024-2026)
+        # Return the first plausible code (skip obvious years)
         for m in matches:
             if m not in ("2024", "2025", "2026", "2027"):
                 return m
