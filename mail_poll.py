@@ -16,14 +16,16 @@ SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(SKILL_DIR, "mail", "scripts"))
 
 from imap_fetch import fetch_all_unread_emails
-from filter_rules import classify_emails, _strip_html
+from filter_rules import classify_emails, _strip_html, extract_verification_code
 
 CONFIG_PATH = os.path.join(SKILL_DIR, "config.json")
 SEEN_FILE = os.path.join(SKILL_DIR, ".seen_uids.json")
 MAX_SEEN_PER_ACCOUNT = 5000
 
-# Inter-agent bus
-AGENT_API = "http://127.0.0.1:8799/interagent/send"
+# Telegram direct send
+TG_TOKEN = os.environ.get("DUCTOR_TG_TOKEN", "")
+TG_CHAT_ID = os.environ.get("DUCTOR_TG_CHAT_ID", "")
+TG_API = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
 
 
 # ── seen_uids management ──────────────────────────────────────────
@@ -107,46 +109,78 @@ def _preprocess_email(email: dict) -> dict:
     }
 
 
-# ── agent communication ───────────────────────────────────────────
+# ── classification & formatting ────────────────────────────────────
 
-def _post_to_agent(emails: list[dict]) -> bool:
-    """Send new email data to the main agent via inter-agent bus."""
-    # Format message: one email per block
-    lines = ["📬 新邮件轮询\n以下为本次新收到的邮件，请按 mail/SKILL.md 规则分类并输出摘要：\n"]
-    for i, e in enumerate(emails, 1):
-        lines.append(f"## 邮件 {i}")
-        lines.append(f"发件人: {e['sender']}")
-        lines.append(f"主题: {e['subject']}")
-        if e.get("attachments"):
-            att_list = ", ".join(
-                f"{a.get('filename', '?')} ({a.get('size', '?')})"
-                for a in e["attachments"]
-            )
-            lines.append(f"附件: {att_list}")
-        lines.append(f"正文: {e['body']}")
-        lines.append(f"账户: {e['account']}")
-        lines.append(f"UID: {e['uid']}")
+def _format_and_send(emails: list[dict], config: dict) -> bool:
+    """Classify emails, format summary, and send directly to Telegram."""
+    result = classify_emails(emails, config)
+
+    lines = []
+    imp_count = len(result.get("important", []))
+    lines.append(f"📬 邮件轮询汇报 — {imp_count} 封重要邮件")
+
+    verifications = result.get("verification", [])
+    if verifications:
         lines.append("")
+        lines.append("🔐 验证码邮件:")
+        for i, e in enumerate(verifications, 1):
+            code = extract_verification_code(e) or "未识别"
+            lines.append(f"  {i}. [{e['account']}] {e['sender']}")
+            lines.append(f"     🔑 验证码: {code}")
+            lines.append(f"     📌 {e.get('subject', '')[:60]}")
 
-    message = "\n".join(lines)
-    payload = json.dumps({
-        "from": "mail-poll",
-        "to": "main",
-        "message": message,
-    }).encode()
+    important = result.get("important", [])
+    if important:
+        lines.append("")
+        lines.append("🔴 重要邮件:")
+        for i, e in enumerate(important, 1):
+            lines.append(f"  {i}. [{e['account']}] {e['sender']}")
+            lines.append(f"     📌 {e.get('subject', '')[:60]}")
 
+    normal = result.get("normal", [])
+    if normal:
+        lines.append("")
+        lines.append("📋 普通邮件:")
+        for i, e in enumerate(normal, 1):
+            lines.append(f"  {i}. [{e['account']}] {e['sender']} — {e.get('subject', '')[:60]}")
+
+    junk_count = len(result.get("junk", []))
+    if junk_count:
+        lines.append(f"\n🗑 垃圾邮件: {junk_count} 封")
+
+    anomalies = result.get("anomalies", [])
+    if anomalies:
+        lines.append("")
+        for a in anomalies:
+            lines.append(a)
+
+    text = "\n".join(lines)
+
+    # Add inline keyboard for mark-read
+    keyboard = None
+    if normal:
+        keyboard = json.dumps({
+            "inline_keyboard": [[
+                {"text": "✅ 一键已读", "callback_data": "mail:mark-normal-read"}
+            ]]
+        })
+
+    payload = {
+        "chat_id": TG_CHAT_ID,
+        "text": text,
+    }
+    if keyboard:
+        payload["reply_markup"] = keyboard
+
+    data = json.dumps(payload).encode()
     try:
-        req = urllib.request.Request(
-            AGENT_API,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            result = json.loads(resp.read().decode())
-            return result.get("success", False)
+        req = urllib.request.Request(TG_API, data=data,
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            resp_data = json.loads(resp.read().decode())
+            return resp_data.get("ok", False)
     except Exception as e:
-        print(f"[mail_poll] Failed to reach agent API: {e}", file=sys.stderr)
+        print(f"[mail_poll] Telegram send failed: {e}", file=sys.stderr)
         return False
 
 
@@ -191,9 +225,9 @@ def main():
                         e["account"] = label
                         flat.append(_preprocess_email(e))
 
-                success = _post_to_agent(flat)
+                success = _format_and_send(flat, config)
                 if success:
-                    print(f"[mail_poll] Sent {total_new} new email(s) to agent",
+                    print(f"[mail_poll] Sent {total_new} new email(s) to Telegram",
                           file=sys.stderr)
 
             # Mark all current UNSEEN as seen (so next poll won't re-report)
