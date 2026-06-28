@@ -1,8 +1,45 @@
-"""Fetch unread emails via IMAP."""
+"""Fetch unread emails via IMAP — supports DoH DNS and IMAP ID."""
 import email
 import imaplib
+import json
+import socket
+import ssl
+import urllib.request
 from email.header import decode_header
 from typing import Any
+
+# Register IMAP ID command for providers that require it (163, QQ, etc.)
+imaplib.Commands["ID"] = ("AUTH",)
+
+
+def _resolve_host(hostname: str) -> str:
+    """
+    Resolve hostname via DNS-over-HTTPS (bypasses TUN DNS hijacking).
+    Returns the first IPv4 address, or the hostname unchanged on failure.
+    """
+    try:
+        url = f"https://dns.google/resolve?name={hostname}&type=A"
+        resp = json.loads(urllib.request.urlopen(url, timeout=5).read())
+        for answer in resp.get("Answer", []):
+            if answer.get("type") == 1:
+                return answer["data"]
+    except Exception:
+        pass
+    return hostname
+
+
+class _IMAP4_SSL_DoH(imaplib.IMAP4_SSL):
+    """IMAP4_SSL subclass that resolves hostname via DoH for correct SNI."""
+
+    def __init__(self, host="", port=993, *, ssl_context=None, timeout=None):
+        self._sni_host = host
+        real_ip = _resolve_host(host)
+        super().__init__(real_ip, port, ssl_context=ssl_context, timeout=timeout)
+
+    def _create_socket(self, timeout):
+        sock = socket.create_connection((self.host, self.port), timeout)
+        ctx = self.ssl_context or ssl.create_default_context()
+        return ctx.wrap_socket(sock, server_hostname=self._sni_host)
 
 
 def _decode_header_value(value: Any) -> str:
@@ -53,10 +90,21 @@ def fetch_unread_emails_for_account(imap_cfg: dict) -> list[dict]:
     Connect to a single IMAP account and fetch all unread emails.
     imap_cfg: {server, port, username, password}
     Returns list of dicts: {sender, subject, body, uid, date}
+    Uses DoH DNS + IMAP ID command for compatibility with 163/QQ.
     """
-    conn = imaplib.IMAP4_SSL(imap_cfg["server"], imap_cfg["port"])
+    conn = _IMAP4_SSL_DoH(imap_cfg["server"], imap_cfg["port"])
     try:
         conn.login(imap_cfg["username"], imap_cfg["password"])
+
+        # Send IMAP ID — required by 163, harmless for others
+        try:
+            conn._simple_command(
+                "ID",
+                '("name" "Ductor" "version" "1.0" "vendor" "python")',
+            )
+        except imaplib.IMAP4.error:
+            pass  # Some servers reject ID, ignore
+
         conn.select("INBOX")
 
         status, message_ids = conn.search(None, "UNSEEN")
