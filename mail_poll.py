@@ -8,6 +8,19 @@ import sys
 import time
 import urllib.request
 
+# Load .env secrets
+_ENV_FILE = os.path.expanduser("~/.ductor/.env")
+if os.path.exists(_ENV_FILE):
+    with open(_ENV_FILE) as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _key, _, _val = _line.partition("=")
+                _key = _key.strip()
+                _val = _val.strip().strip('"').strip("'")
+                if _key not in os.environ:
+                    os.environ[_key] = _val
+
 # Prevent hangs on blocked/flaky IMAP connections
 socket.setdefaulttimeout(15)
 
