@@ -1,9 +1,21 @@
 """Email classification and blacklist/important rule management."""
 import json
+import re
 from pathlib import Path
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "config.json"
 PREVIEW_LENGTH = 200
+
+# Keywords that suggest a verification code email
+_VERIFICATION_SUBJECT_KW = [
+    "验证码", "verification code", "确认码", "安全码",
+    "login code", "sign-in code", "one-time code", "otp",
+    "security code", "授权码", "登录验证", "二次验证",
+]
+# Typical verification code patterns (4-8 digits, often isolated)
+_VERIFICATION_CODE_RE = re.compile(
+    r"(?<!\d)(\d{4,8})(?!\d)", re.MULTILINE
+)
 
 
 def _matches_keywords(text: str, keywords: list[str]) -> list[str]:
@@ -14,13 +26,37 @@ def _matches_keywords(text: str, keywords: list[str]) -> list[str]:
     return [kw for kw in keywords if kw.lower() in text_lower]
 
 
+def extract_verification_code(email: dict) -> str | None:
+    """
+    Detect if an email contains a verification code and extract it.
+    Checks subject keywords first, then scans body for numeric codes.
+    Returns the code string or None.
+    """
+    subject = (email.get("subject") or "").lower()
+    body = (email.get("body") or "")
+
+    # Check if subject suggests verification
+    has_verification_kw = any(kw in subject for kw in _VERIFICATION_SUBJECT_KW)
+    if not has_verification_kw:
+        return None
+
+    # Extract potential codes from body (first 1000 chars, codes are usually early)
+    matches = _VERIFICATION_CODE_RE.findall(body[:1000])
+    if matches:
+        # Return the first plausible code (skip obvious years like 2024-2026)
+        for m in matches:
+            if m not in ("2024", "2025", "2026", "2027"):
+                return m
+    return None
+
+
 def classify_emails(emails: list[dict], config: dict) -> dict:
     """
-    Classify emails into important, normal, junk.
+    Classify emails into verification, important, normal, junk.
     Also detect frequency anomalies.
 
     Each email dict: {sender, subject, body, uid, date}
-    Returns: {important: [...], normal: [...], junk: [...], anomalies: [str]}
+    Returns: {verification: [...], important: [...], normal: [...], junk: [...], anomalies: [str]}
     """
     filters = config.get("mail", {}).get("filters", {})
     important_senders = filters.get("important_senders", [])
@@ -28,6 +64,7 @@ def classify_emails(emails: list[dict], config: dict) -> dict:
     blacklist_senders = filters.get("blacklist_senders", [])
     blacklist_keywords = filters.get("blacklist_keywords", [])
 
+    verification = []
     important = []
     normal = []
     junk = []
@@ -45,6 +82,11 @@ def classify_emails(emails: list[dict], config: dict) -> dict:
             continue
         if _matches_keywords(search_text, blacklist_keywords):
             junk.append(email)
+            continue
+
+        # Verification code check (highest priority after blacklist)
+        if extract_verification_code(email):
+            verification.append(email)
             continue
 
         # Track keyword frequency for anomaly detection
@@ -77,6 +119,7 @@ def classify_emails(emails: list[dict], config: dict) -> dict:
                 )
 
     return {
+        "verification": verification,
         "important": important,
         "normal": normal,
         "junk": junk,
