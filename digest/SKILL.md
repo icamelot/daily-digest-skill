@@ -2,9 +2,13 @@
 
 每天 8:00 和 22:00 自动生成日报推送。也可按需手动查询。
 
+## 多群聊
+
+config 的 `digest.groups` 是一个数组，每个群聊有 `label`（如"主群"、"实验室"）和 `chat_id`。
+
 ## 数据来源
 
-- 群聊历史：调用 `scripts/group_reader.py` 的 `fetch_group_messages(config, since_timestamp)` + `get_last_digest_timestamp(digest_type)`
+- 群聊历史：调用 `scripts/group_reader.py` 的 `fetch_group_messages(config, since_timestamp)` 拉取所有群聊，每条消息带 `group_label`。指定群聊时传 `group_label` 参数
 - 邮件概况：调用 mail 模块的 `imap_fetch.py` + `filter_rules.py`
 - 待办状态：调用 todo 模块的 `graph_api.py`
 
@@ -12,12 +16,12 @@
 
 晨报（8:00）：回顾上次晚报至今
 
-💬 群聊回顾
-• 各 agent 做了什么，关键结论
-• 你参与讨论的决策点
+💬 群聊回顾（按群分组）
+• [主群] 各 agent 做了什么，关键结论
+• [实验室] 关键讨论要点
 
 📬 邮件概况
-• 自上次日报以来的新邮件数量
+• 自上次日报以来的新邮件数量（按账户分组）
 • 重要/普通/垃圾箱分布
 
 ✅ 今日待办
@@ -28,10 +32,11 @@
 
 ## 分级规则
 
-1. 拉取消息后调用 `scripts/escalate.py` 的 `check_escalation(messages, config)`
-2. 同时检查：重要邮件数量 >5 → 触发升级
-3. 未升级 → 轻量摘要（每个板块 3-5 条要点，你（AI agent）自行总结）
-4. 升级 → 详细报告（按 agent 分章节 + 引用关键原文 + 建议关注点）
+1. 对每个群聊分别调用 `scripts/escalate.py` 的 `check_escalation(messages, config)`（传该群的消息子集）
+2. 任一群触发升级 → 整个日报升级为详细报告
+3. 同时检查：重要邮件数量 >5 → 触发升级
+4. 未升级 → 轻量摘要（每个板块 3-5 条要点，你（AI agent）自行总结）
+5. 升级 → 详细报告（按 agent + 群聊分章节 + 引用关键原文 + 建议关注点）
 
 ## 未展开板块按钮
 
@@ -46,8 +51,9 @@
 
 用户可指定范围：
 
-"日报" → 完整日报（三块全出）
-"群聊总结" / "群里怎么样" → 仅 💬 群聊回顾
+"日报" → 完整日报（三块全出，所有群聊）
+"群聊总结" / "群里怎么样" → 仅 💬 群聊回顾（所有群）
+"主群总结" / "实验室怎么样" → 仅指定 label 的群聊
 "邮件概况" / "邮件怎么样" → 仅 📬 邮件板块
 "待办情况" / "还有什么没做" → 仅 ✅ 待办板块
 

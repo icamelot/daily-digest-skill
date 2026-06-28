@@ -41,7 +41,12 @@
     }
   },
   "digest": {
-    "group_chat_id": -1001234567890,
+    "groups": [
+      {
+        "label": "主群",
+        "chat_id": -1001234567890
+      }
+    ],
     "morning_time": "08:00",
     "evening_time": "22:00",
     "escalation_keywords": ["报错", "失败", "冲突", "不同意"]
