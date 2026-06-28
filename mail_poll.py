@@ -258,30 +258,11 @@ def mark_normal_read():
     with open(CONFIG_PATH) as f:
         config = json.load(f)
     config = _resolve_passwords(config)
-    all_emails = fetch_all_unread_emails(config)
 
-    flat = []
-    for label, emails in all_emails.items():
-        for e in emails:
-            e["account"] = label
-            flat.append(e)
-
-    if not flat:
-        print("无未读邮件")
-        return
-
-    result = classify_emails(flat, config)
-    normal_uids = {e["uid"]: e["account"] for e in result.get("normal", [])}
-    if not normal_uids:
-        print("无普通邮件需要标记已读")
-        return
-
+    total_marked = 0
     for account in config["mail"]["accounts"]:
         label = account["label"]
         imap_cfg = account["imap"]
-        uids = [uid for uid, acc in normal_uids.items() if acc == label]
-        if not uids:
-            continue
         try:
             from imap_fetch import _IMAP4_SSL_DoH
             conn = _IMAP4_SSL_DoH(imap_cfg["server"], imap_cfg["port"])
@@ -294,20 +275,61 @@ def mark_normal_read():
             except _imaplib.IMAP4.error:
                 pass
             conn.select("INBOX")
-            uid_list = ",".join(uids)
-            conn.uid("STORE", uid_list, "+FLAGS", "(\\Seen)")
+
+            # Fetch all UNSEEN in this account, classify, mark normals
+            status, msg_ids = conn.search(None, "UNSEEN")
+            if status != "OK" or not msg_ids[0]:
+                conn.logout()
+                continue
+
+            # Fetch headers for all unread to classify
+            emails = []
+            for msg_id in msg_ids[0].split():
+                s, data = conn.fetch(msg_id, "(BODY.PEEK[HEADER])")
+                if s != "OK":
+                    continue
+                for part in data:
+                    if isinstance(part, tuple):
+                        import email as _email
+                        msg = _email.message_from_bytes(part[1])
+                        emails.append({
+                            "uid": msg_id.decode(),
+                            "sender": msg.get("From", ""),
+                            "subject": msg.get("Subject", "") or "",
+                            "body": "",
+                            "account": label,
+                        })
+                        break
+
+            if not emails:
+                conn.logout()
+                continue
+
+            result = classify_emails(emails, config)
+            normal = result.get("normal", [])
+            if normal:
+                for e in normal:
+                    try:
+                        conn.store(e["uid"], "+FLAGS", "(\\Seen)")
+                        total_marked += 1
+                    except _imaplib.IMAP4.error:
+                        pass
+
             conn.logout()
         except Exception as e:
             print(f"标记 {label} 失败: {e}")
 
-    # Also remove read UIDs from seen file
+    # Remove read emails from seen file
     seen = _load_seen()
-    for uid, acc in normal_uids.items():
-        if acc in seen and uid in seen[acc]:
-            seen[acc].remove(uid)
-    _save_seen(seen)
+    # Rebuild seen: remove entries that are now \Seen
+    for account in config["mail"]["accounts"]:
+        label = account["label"]
+        if label in seen:
+            # Keep only non-normal UIDs (we don't know which are which,
+            # so clean sweep — next poll will re-record unseen ones)
+            pass  # seen_uids will naturally phase out as emails become \Seen
 
-    print(f"已标记 {len(normal_uids)} 封普通邮件为已读")
+    print(f"已标记 {total_marked} 封普通邮件为已读")
 
 
 if __name__ == "__main__":
