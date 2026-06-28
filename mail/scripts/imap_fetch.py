@@ -113,7 +113,8 @@ def fetch_unread_emails_for_account(imap_cfg: dict) -> list[dict]:
 
         emails = []
         for msg_id in message_ids[0].split():
-            status, msg_data = conn.fetch(msg_id, "(RFC822)")
+            # Use BODY.PEEK to read without setting \Seen flag
+            status, msg_data = conn.fetch(msg_id, "(BODY.PEEK[])")
             if status != "OK":
                 continue
 
