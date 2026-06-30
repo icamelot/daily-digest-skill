@@ -30,6 +30,17 @@
 - "改 xx 截止时间为 yy" → 调用 `update_task(config, task_id, {"dueDateTime": ...})`
 - "删除 xx" → 先确认再调用 `delete_task(config, task_id)`
 
+## 清理旧任务
+
+用户说"清理已完成任务/删除超过一周的任务"时：
+
+1. 先 dry-run 预览：`python3 todo/scripts/cleanup_old_completed.py --days 7 --dry-run`
+2. 告知用户将要删除的数量，获得确认
+3. 执行删除：`python3 todo/scripts/cleanup_old_completed.py --days 7`
+4. 报告结果（删除数 + 失败数）
+
+`--days N` 控制天数阈值，默认 7 天。
+
 ## 主动感知
 
 当你在对话中检测到用户可能完成了某个任务时，主动询问：
