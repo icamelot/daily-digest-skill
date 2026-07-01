@@ -5,6 +5,10 @@ config.json
 .ms_token.json
 todo/.ms_token.json
 
+# Email state files (daemon runtime data)
+.unprocessed_emails.json
+.seen_uids.json
+
 # Digest timestamp markers
 .digest_markers/
 
