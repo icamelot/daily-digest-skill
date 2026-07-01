@@ -2,8 +2,10 @@
 """Mail daemon — fetch, classify, push. Zero LLM.
 Reuses imap_fetch + filter_rules from the skill. Replaces personal-mail cron."""
 import json
+import math
 import os
 import socket
+import subprocess
 import sys
 import time
 import urllib.request
@@ -17,6 +19,7 @@ from filter_rules import classify_emails, _strip_html, extract_verification_code
 
 CONFIG_PATH = SKILL_DIR / "config.json"
 SEEN_FILE = SKILL_DIR / ".seen_uids.json"
+UNPROCESSED_CLI = str(SKILL_DIR / "mail" / "scripts" / "unprocessed_mail.py")
 MAX_SEEN_PER_ACCOUNT = 5000
 
 
@@ -74,6 +77,45 @@ def _mark_seen(all_emails: dict) -> None:
                 seen[label].append(uid)
                 existing.add(uid)
     _save_seen(seen)
+
+
+def _add_to_unprocessed(emails: list[dict]) -> None:
+    """Pipe new email entries (lightweight) into unprocessed_mail.py --add."""
+    lightweight = []
+    for e in emails:
+        lightweight.append({
+            "uid": e.get("uid", ""),
+            "sender": e.get("sender", ""),
+            "subject": e.get("subject", ""),
+            "date": e.get("date", ""),
+            "account": e.get("account", ""),
+        })
+    payload = json.dumps(lightweight)
+    try:
+        proc = subprocess.run(
+            [sys.executable, UNPROCESSED_CLI, "--add"],
+            input=payload,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if proc.returncode != 0:
+            print(f"[mail_daemon] unprocessed add failed: {proc.stderr.strip()}", file=sys.stderr)
+    except Exception as e:
+        print(f"[mail_daemon] unprocessed add error: {e}", file=sys.stderr)
+
+
+def _sync_unprocessed_seen() -> None:
+    """Tell unprocessed_mail.py to remove externally-read entries."""
+    try:
+        subprocess.run(
+            [sys.executable, UNPROCESSED_CLI, "--sync-seen"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except Exception as e:
+        print(f"[mail_daemon] sync-seen error: {e}", file=sys.stderr)
 
 
 def _resolve_passwords(config: dict) -> dict:
@@ -143,7 +185,11 @@ def _format_and_send(emails: list[dict], config: dict) -> bool:
         req = urllib.request.Request(url, data=data,
             headers={"Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read()).get("ok", False)
+            body = resp.read()
+            result = json.loads(body)
+            if not result.get("ok", False):
+                print(f"[mail_daemon] API error: {result.get('description', 'unknown')} (error_code={result.get('error_code', '?')})", file=sys.stderr)
+            return result.get("ok", False)
     except Exception as e:
         print(f"[mail_daemon] Send failed: {e}", file=sys.stderr)
         return False
@@ -157,11 +203,15 @@ def main():
         print(f"[mail_daemon] Config not found: {CONFIG_PATH}", file=sys.stderr)
         sys.exit(1)
 
-    print("[mail_daemon] Started (interval=300s)", file=sys.stderr)
+    INTERVAL = 300  # 5 minutes, aligned to wall clock
+    print(f"[mail_daemon] Started (interval={INTERVAL}s, clock-aligned)", file=sys.stderr)
     while True:
         try:
             config = json.loads(CONFIG_PATH.read_text())
             config = _resolve_passwords(config)
+
+            # Sync — remove externally read emails from unprocessed list
+            _sync_unprocessed_seen()
 
             all_emails = fetch_all_unread_emails(config)
             new_emails = _filter_new(all_emails)
@@ -178,12 +228,16 @@ def main():
                 ok = _format_and_send(flat, config)
                 if ok:
                     print(f"[mail_daemon] Sent {total_new} new email(s)", file=sys.stderr)
-
-            _mark_seen(all_emails)
+                    _mark_seen(all_emails)
+                    _add_to_unprocessed(flat)
+                else:
+                    print(f"[mail_daemon] Send failed, {total_new} email(s) NOT marked seen — will retry next poll", file=sys.stderr)
+            else:
+                _mark_seen(all_emails)
         except Exception as e:
             print(f"[mail_daemon] Error: {e}", file=sys.stderr)
 
-        time.sleep(300)
+        time.sleep(max(0, math.ceil(time.time() / INTERVAL) * INTERVAL - time.time()))
 
 
 if __name__ == "__main__":
