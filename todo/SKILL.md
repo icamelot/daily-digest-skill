@@ -2,13 +2,25 @@
 
 通过 Microsoft Graph API 管理用户的 Microsoft To Do 任务。
 
+所有操作通过 CLI 完成，任何目录可运行：
+
+```bash
+python3 /ductor/workspace/skills/personal-assistant/todo/scripts/todo_cli.py <command>
+```
+
 ## 查任务
 
 用户说"待办/任务/还有什么没做"时：
 
-1. 调用 `scripts/graph_api.py` 的 `get_tasks(config)` 拉取任务列表
-2. 按优先级 + 截止时间排列
-3. 展示：
+```bash
+python3 /ductor/workspace/skills/personal-assistant/todo/scripts/todo_cli.py --list
+```
+
+可选过滤：
+- `--status notStarted` — 仅未开始
+- `--status completed` — 仅已完成
+
+输出：JSON 数组。按优先级 + 截止时间排列后展示：
 
 ✅ 当前任务 (已完成数/总数)
 
@@ -22,13 +34,30 @@
 
 1. 解析任务名、可选截止时间、可选优先级
 2. 展示确认卡片
-3. 用户确认后调用 `create_task(config, title, due_date, priority)`
+3. 用户确认后执行：
+
+```bash
+python3 /ductor/workspace/skills/personal-assistant/todo/scripts/todo_cli.py \
+  --create "任务标题" --due "2026-07-05" --priority high
+```
+
+`--due` 格式：YYYY-MM-DD。`--priority`：high / normal / low。
 
 ## 完成/修改任务
 
-- "标记 xx 完成" → 调用 `update_task(config, task_id, {"status": "completed"})`
-- "改 xx 截止时间为 yy" → 调用 `update_task(config, task_id, {"dueDateTime": ...})`
-- "删除 xx" → 先确认再调用 `delete_task(config, task_id)`
+- "标记 xx 完成"：
+
+```bash
+python3 /ductor/workspace/skills/personal-assistant/todo/scripts/todo_cli.py \
+  --complete <task-id>
+```
+
+- "删除 xx"：先确认再执行
+
+```bash
+python3 /ductor/workspace/skills/personal-assistant/todo/scripts/todo_cli.py \
+  --delete <task-id> --force
+```
 
 ## 清理旧任务
 
