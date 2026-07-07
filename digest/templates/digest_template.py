@@ -16,13 +16,9 @@ def render_inline_keyboard(data: dict) -> list[list[dict]] | None:
     # Todo: "完成: {title}" for each pending task (first 5)
     todos = data.get("todos", [])
     pending = [t for t in todos if not t.get("completed", False)]
-    row = []
-    for task in pending[:5]:
-        task_id = task.get("id", "")
+    for i, task in enumerate(pending[:5]):
         title = task.get("title", "任务")[:20]
-        row.append({"text": f"✅ {title}", "callback_data": f"digest:todo:complete:{task_id}"})
-    if row:
-        keyboard.append(row)
+        keyboard.append([{"text": f"✅ {title}", "callback_data": f"digest:todo:{i}"}])
 
     # Chat escalation: "查看详情" if triggered
     if data.get("escalation", {}).get("should_escalate"):
