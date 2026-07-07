@@ -76,9 +76,7 @@ def render_digest(summary: dict, raw_data: dict) -> tuple[str, list | None]:
         if sec.get("items"):
             # Fine-grained: numbered list with priority icons + optional AI comments
             for i, item in enumerate(sec["items"]):
-                importance = item.get("importance", "normal")
-                icon = {"high": "❗", "normal": "·", "low": "·"}.get(importance, "·")
-                lines.append(f"  {i+1}. {icon} {item['label']} — {item.get('detail', '')}")
+                lines.append(f"  {i+1}. {item['label']} — {item.get('detail', '')}")
                 if item.get("comment"):
                     lines.append(f"     {item['comment']}")
         else:
