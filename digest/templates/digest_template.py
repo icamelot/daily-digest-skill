@@ -27,15 +27,38 @@ def render_inline_keyboard(data: dict) -> list[list[dict]] | None:
     return keyboard if keyboard else None
 
 
+def _filter_recent(todos: list[dict], days: int = 7) -> list[dict]:
+    """Exclude completed tasks older than `days`. Pending tasks always included."""
+    from datetime import datetime, timezone
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None)  # naive for comparison
+    cutoff = cutoff.replace(hour=0, minute=0, second=0, microsecond=0) - __import__('datetime').timedelta(days=days)
+
+    def _keep(task: dict) -> bool:
+        if not task.get("completed", False):
+            return True  # pending → always include
+        date_str = task.get("completed_date", "")
+        if not date_str:
+            return True  # no date → include (conservative)
+        try:
+            completed_dt = datetime.fromisoformat(date_str.replace("Z", ""))
+            return completed_dt >= cutoff
+        except (ValueError, TypeError):
+            return True  # can't parse → include (conservative)
+
+    return [t for t in todos if _keep(t)]
+
+
 def _format_todos(todos: list[dict]) -> str:
-    """Format todo list into a human-readable summary for the agent prompt."""
+    """Format todo list into a human-readable summary for the agent prompt.
+    Only includes completed tasks from within the last 7 days."""
     if not todos:
         return "无待办任务"
 
-    pending = [t for t in todos if not t.get("completed", False)]
-    completed = [t for t in todos if t.get("completed", False)]
+    recent = _filter_recent(todos)
+    pending = [t for t in recent if not t.get("completed", False)]
+    completed = [t for t in recent if t.get("completed", False)]
 
-    lines = [f"{len(todos)} 个任务 ({len(pending)} 未完成, {len(completed)} 已完成)"]
+    lines = [f"{len(recent)} 个任务 ({len(pending)} 未完成, {len(completed)} 已完成)"]
     for task in pending:
         priority = task.get("priority", "normal")
         icon = {"high": "❗", "medium": "🟡", "low": "  "}.get(priority, "·")
@@ -133,9 +156,10 @@ def build_agent_prompt(data: dict) -> str:
     escalation = data.get("escalation", {})
 
     raw_todos = data.get("todos", [])
-    todo_pending = len([t for t in raw_todos if not t.get("completed", False)])
-    todo_total = len(raw_todos)
-    todos = _format_todos(raw_todos)
+    recent_todos = _filter_recent(raw_todos)
+    todo_pending = len([t for t in recent_todos if not t.get("completed", False)])
+    todo_total = len(recent_todos)
+    todos = _format_todos(recent_todos)
 
     prompt = f"""你是日报摘要生成器。根据以下数据生成一份{type_label} JSON。只输出JSON，不要其他文字。
 
