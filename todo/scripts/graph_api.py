@@ -153,10 +153,12 @@ def get_tasks(config: dict) -> list[dict]:
                 continue
             for task in tasks_data.get("value", []):
                 completed_raw = task.get("completedDateTime", {}) or {}
+                status = task.get("status", "notStarted")
                 all_tasks.append({
                     "id": task["id"],
                     "title": task.get("title", ""),
-                    "status": task.get("status", "notStarted"),
+                    "status": status,
+                    "completed": status == "completed",
                     "priority": _priority_label(task.get("importance", "")),
                     "due_date": task.get("dueDateTime", {}).get("dateTime", ""),
                     "completed_date": completed_raw.get("dateTime", ""),
