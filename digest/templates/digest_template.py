@@ -74,11 +74,11 @@ def render_digest(summary: dict, raw_data: dict) -> tuple[str, list | None]:
         lines.append(title)
 
         if sec.get("items"):
-            # Fine-grained: use fixed template per item
-            for item in sec["items"]:
+            # Fine-grained: numbered list with priority icons
+            for i, item in enumerate(sec["items"]):
                 importance = item.get("importance", "normal")
-                icon = {"high": "❗", "normal": "·", "low": "  "}.get(importance, "·")
-                lines.append(f"{icon} {item['label']} — {item.get('detail', '')}")
+                icon = {"high": "❗", "normal": "·", "low": "·"}.get(importance, "·")
+                lines.append(f"  {i+1}. {icon} {item['label']} — {item.get('detail', '')}")
         else:
             # Coarse-grained: use AI-generated text
             text = sec.get("text", "")
@@ -87,13 +87,12 @@ def render_digest(summary: dict, raw_data: dict) -> tuple[str, list | None]:
 
         lines.append("")
 
-    # DeepSeek balance — use computed value from raw data, not agent
+    # Token usage — from computed raw data
     ds = raw_data.get("deepseek", {}) or {}
     ds_display = ds.get("display", "")
     if ds_display:
-        lines.append(ds_display)
-    elif summary.get("deepseek_line"):
-        lines.append(summary["deepseek_line"])
+        lines.append("📊 Token 用量")
+        lines.append(f"  · {ds_display}")
 
     # Generate inline keyboard from data conditions (not from agent output)
     keyboard = render_inline_keyboard(raw_data)
@@ -133,7 +132,10 @@ def build_agent_prompt(data: dict) -> str:
 
     escalation = data.get("escalation", {})
 
-    todos = _format_todos(data.get("todos", []))
+    raw_todos = data.get("todos", [])
+    todo_pending = len([t for t in raw_todos if not t.get("completed", False)])
+    todo_total = len(raw_todos)
+    todos = _format_todos(raw_todos)
 
     prompt = f"""你是日报摘要生成器。根据以下数据生成一份{type_label} JSON。只输出JSON，不要其他文字。
 
@@ -153,25 +155,24 @@ def build_agent_prompt(data: dict) -> str:
 
 输出格式（严格遵守）:
 {{
-  "greeting": "{time_label}好！……",
-  "deepseek_line": "📊 DeepSeek: ¥x.xx (…… ¥x.xx)",
+  "greeting": "{time_label}好！……（含日期和星期）",
   "escalation": {{"triggered": true/false, "alert": "⚠️ 警告文字（triggered=true时必填）"}},
   "sections": [
     {{
       "type": "email",
-      "title": "📬 邮件",
+      "title": "📬 邮件（{email_total}封，{email_important}封重要）",
       "text": "AI生成的邮件总结markdown",
       "items": [{{"label": "发件人", "detail": "描述", "importance": "high/normal/low"}}]
     }},
     {{
       "type": "chat",
-      "title": "💬 群聊",
+      "title": "💬 群聊（{chat_total}条消息）",
       "text": "AI生成的群聊总结",
       "items": []
     }},
     {{
       "type": "todo",
-      "title": "✅ 待办",
+      "title": "✅ 待办（{todo_pending}项未完成 / {todo_total}项总计）",
       "text": "AI生成的待办总结",
       "items": [{{"label": "任务名", "detail": "优先级/截止日", "importance": "high/normal/low"}}]
     }}
@@ -179,10 +180,12 @@ def build_agent_prompt(data: dict) -> str:
 }}
 
 规则:
-- text 字段是markdown文本，你决定用列表/段落/emoji
-- items 可选，有items就填结构化数据，没有就只用text
+- 邮件和todo section用items模式（结构化的label/detail），不用text
+- 群聊section用text模式（自然语言总结）
+- items中: label是简短名称, detail是补充描述
+- 不要把常规通知（IEEE简报、GitHub actions）标为high importance
 - 不包含buttons字段（按钮由代码自动生成）
-- 邮件和群聊section中不要把常规通知（IEEE简报、GitHub actions）标为high importance
+- 不含deepseek_line字段（Token用量由代码自动添加）
 - greeting包含日期和星期几"""
 
     return prompt
