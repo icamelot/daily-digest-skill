@@ -22,7 +22,6 @@ sys.path.insert(0, str(SKILL_DIR / "digest" / "templates"))
 from digest_template import render_digest, build_agent_prompt
 
 PID_FILE = SKILL_DIR / ".digest_daemon.pid"
-HEARTBEAT_FILE = SKILL_DIR / ".digest_daemon.heartbeat"
 RUN_DIGEST_SCRIPT = str(SKILL_DIR / "digest" / "scripts" / "run_digest.py")
 ASK_AGENT_SCRIPT = "/ductor/workspace/tools/agent_tools/ask_agent.py"
 
@@ -30,6 +29,12 @@ CHECK_INTERVAL = 30     # 30s check granularity
 RETRY_GAP = 300         # 5min between retries
 MAX_RETRIES = 3         # max attempts per digest
 AGENT_TIMEOUT = 270     # 4.5min — leaves buffer before next 5min check
+
+# Digest schedule in UTC. Adjust for your timezone:
+#   CST (Beijing): morning=0 → 8:00本地, evening=14 → 22:00本地
+#   EST (New York): morning=13 → 8:00本地, evening=3  → 22:00本地(next day)
+MORNING_HOUR_UTC = 0    # 8:00 CST
+EVENING_HOUR_UTC = 14   # 22:00 CST
 
 _shutdown_requested = False
 
@@ -40,13 +45,6 @@ def _ts() -> str:
 
 def _log(msg: str) -> None:
     print(f"[digest_daemon] {_ts()} {msg}", file=sys.stderr, flush=True)
-
-
-def _update_heartbeat() -> None:
-    try:
-        HEARTBEAT_FILE.write_text(_ts())
-    except Exception:
-        pass
 
 
 def _acquire_lock() -> bool:
@@ -164,6 +162,10 @@ def _send_telegram(message: str, reply_markup: dict | None = None) -> bool:
         _log("Missing TG credentials (DUCTOR_TG_TOKEN or DUCTOR_TG_CHAT_ID)")
         return False
 
+    if len(message) > 4000:
+        _log(f"Message truncated from {len(message)} to 4000 chars")
+        message = message[:4000] + "... (truncated)"
+
     url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
     payload = {"chat_id": tg_chat_id, "text": message}
     if reply_markup:
@@ -191,7 +193,7 @@ def _send_telegram(message: str, reply_markup: dict | None = None) -> bool:
 
 def _wait_until(target_hour: int, target_minute: int) -> None:
     """Sleep until the target hour:minute. Returns immediately if already past."""
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     target = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
     if target <= now:
         return  # already past, don't wait
@@ -200,11 +202,10 @@ def _wait_until(target_hour: int, target_minute: int) -> None:
     time.sleep(wait_sec)
 
 
-def _in_window(now: datetime, schedule_hour: int) -> bool:
-    """Check if we're in the execution window for a digest.
-    Window: schedule_hour-5 to schedule_hour+5 minutes.
-    E.g. for 8:00 schedule: 7:55-8:05."""
-    target_minutes = schedule_hour * 60
+def _in_window(now: datetime, schedule_hour_utc: int) -> bool:
+    """Check if we're in the execution window (UTC).
+    Window: schedule_hour_utc-5 to schedule_hour_utc+5 minutes."""
+    target_minutes = schedule_hour_utc * 60
     now_minutes = now.hour * 60 + now.minute
     window_start = target_minutes - 5   # e.g. 475 for 8:00 (7:55)
     window_end = target_minutes + 5     # e.g. 485 for 8:00 (8:05)
@@ -236,23 +237,20 @@ def main():
         "morning": {"done_today": False, "attempts": 0, "last_attempt": None},
         "evening": {"done_today": False, "attempts": 0, "last_attempt": None},
     }
-    last_day = datetime.now().day
+    last_day = datetime.now(timezone.utc).day
 
     while not _shutdown_requested:
         try:
-            _update_heartbeat()
 
-            now = datetime.now()
-
-            # Reset daily state at midnight
+            now = datetime.now(timezone.utc)
             if now.day != last_day:
                 _log("New day — resetting state")
                 state["morning"] = {"done_today": False, "attempts": 0, "last_attempt": None}
                 state["evening"] = {"done_today": False, "attempts": 0, "last_attempt": None}
                 last_day = now.day
 
-            # Check each digest type
-            for digest_type, schedule_hour in [("morning", 8), ("evening", 22)]:
+            # Check each digest type (schedule in UTC, see constants above)
+            for digest_type, schedule_hour in [("morning", MORNING_HOUR_UTC), ("evening", EVENING_HOUR_UTC)]:
                 s = state[digest_type]
 
                 if not _in_window(now, schedule_hour) or s["done_today"]:
@@ -328,7 +326,7 @@ if __name__ == "__main__":
         _shutdown_requested = False
         try:
             main()
-        except BaseException as e:
+        except Exception as e:
             print(f"[digest_daemon] {_ts()} FATAL: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
             import traceback
             traceback.print_exc(file=sys.stderr)

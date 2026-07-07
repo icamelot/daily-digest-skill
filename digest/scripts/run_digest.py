@@ -50,7 +50,7 @@ def compute_deepseek(snapshot_label: str, comparison_label: str, consumption_ico
     Args:
         snapshot_label: 'morning' or 'evening' — label for today's snapshot
         comparison_label: 'evening' (for morning digest — yesterday evening) or 'morning' (for evening digest — today morning)
-        consumption_icon: '\U0001f319' or '☀️'
+        consumption_icon: '🌙' or '☀️'
         consumption_label: '夜间' or '日间'
     """
     try:
@@ -107,7 +107,7 @@ def run(digest_type: str) -> dict:
         marker_write = "morning"
         ds_snapshot = "morning"
         ds_comparison = "evening"
-        ds_icon = "\U0001f319"
+        ds_icon = "🌙"
         ds_label = "夜间"
     else:
         marker_read = "morning"   # evening digest covers period since last morning
