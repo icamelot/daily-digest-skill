@@ -1,5 +1,4 @@
 """Digest message renderer — fixed template + conditional buttons."""
-from datetime import datetime, timezone
 
 
 def render_inline_keyboard(data: dict) -> list[list[dict]] | None:
