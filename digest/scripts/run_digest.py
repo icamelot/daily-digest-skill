@@ -85,7 +85,7 @@ def compute_deepseek(snapshot_label: str, comparison_label: str, consumption_ico
             delta = comparison_snap["balance"] - today_snap["balance"]
             consumption = round(delta, 2)
 
-        display = f"DeepSeek: ¥{today_snap['balance']:.2f}"
+        display = f"🐋 DeepSeek: ¥{today_snap['balance']:.2f}"
         if consumption is not None:
             if consumption >= 0:
                 display += f" ({consumption_icon} {consumption_label} ¥{consumption:.2f})"
