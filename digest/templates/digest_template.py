@@ -87,8 +87,13 @@ def render_digest(summary: dict, raw_data: dict) -> tuple[str, list | None]:
 
         lines.append("")
 
-    # DeepSeek balance
-    lines.append(summary.get("deepseek_line", ""))
+    # DeepSeek balance — use computed value from raw data, not agent
+    ds = raw_data.get("deepseek", {}) or {}
+    ds_display = ds.get("display", "")
+    if ds_display:
+        lines.append(ds_display)
+    elif summary.get("deepseek_line"):
+        lines.append(summary["deepseek_line"])
 
     # Generate inline keyboard from data conditions (not from agent output)
     keyboard = render_inline_keyboard(raw_data)
