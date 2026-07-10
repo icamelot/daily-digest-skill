@@ -123,14 +123,18 @@ def fetch_unread_emails_for_account(imap_cfg: dict) -> list[dict]:
 
         conn.select("INBOX")
 
-        status, message_ids = conn.search(None, "UNSEEN")
+        # Use UID SEARCH/FETCH — UIDs are stable and never reused. Sequence
+        # numbers shift as the mailbox changes and collide with prior seen
+        # state, causing new mail to be silently dropped (163 anti-spam
+        # reorders/expunges aggressively, so it hit this first).
+        status, message_ids = conn.uid("search", None, "UNSEEN")
         if status != "OK" or not message_ids[0]:
             return []
 
         emails = []
         for msg_id in message_ids[0].split():
             # Use BODY.PEEK to read without setting \Seen flag
-            status, msg_data = conn.fetch(msg_id, "(BODY.PEEK[])")
+            status, msg_data = conn.uid("fetch", msg_id, "(BODY.PEEK[])")
             if status != "OK":
                 continue
 

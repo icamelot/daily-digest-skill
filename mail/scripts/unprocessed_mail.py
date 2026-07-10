@@ -156,7 +156,7 @@ def _resolve_passwords(config: dict) -> dict:
 def _imap_get_unseen_uids(config: dict) -> set[str]:
     """Return set of uid strings that are currently UNSEEN across all accounts."""
     import imaplib as _imaplib
-    imaplib.Commands["ID"] = ("AUTH",)
+    _imaplib.Commands["ID"] = ("AUTH",)
 
     # Add mail/scripts to path for _IMAP4_SSL_DoH
     mail_scripts = str(Path(__file__).resolve().parent)
@@ -181,7 +181,10 @@ def _imap_get_unseen_uids(config: dict) -> set[str]:
             except _imaplib.IMAP4.error:
                 pass
             conn.select("INBOX")
-            status, msg_ids = conn.search(None, "UNSEEN")
+            # UID SEARCH — must match imap_fetch's UID-based identifiers,
+            # otherwise unprocessed entries (keyed by real UID) never match
+            # and cmd_sync_seen would wipe the whole list every cycle.
+            status, msg_ids = conn.uid("search", None, "UNSEEN")
             if status == "OK" and msg_ids[0]:
                 for mid in msg_ids[0].split():
                     uids.add(mid.decode())
@@ -194,7 +197,7 @@ def _imap_get_unseen_uids(config: dict) -> set[str]:
 def _imap_mark_all_seen(config: dict) -> int:
     """Mark all UNSEEN as \\Seen across all accounts. Returns count."""
     import imaplib as _imaplib
-    imaplib.Commands["ID"] = ("AUTH",)
+    _imaplib.Commands["ID"] = ("AUTH",)
 
     mail_scripts = str(Path(__file__).resolve().parent)
     if mail_scripts not in sys.path:
@@ -219,11 +222,11 @@ def _imap_mark_all_seen(config: dict) -> int:
             except _imaplib.IMAP4.error:
                 pass
             conn.select("INBOX")
-            status, msg_ids = conn.search(None, "UNSEEN")
+            status, msg_ids = conn.uid("search", None, "UNSEEN")
             if status == "OK" and msg_ids[0]:
                 for mid in msg_ids[0].split():
                     try:
-                        conn.store(mid.decode(), "+FLAGS", "(\\Seen)")
+                        conn.uid("store", mid.decode(), "+FLAGS", "(\\Seen)")
                         total += 1
                     except _imaplib.IMAP4.error:
                         pass
