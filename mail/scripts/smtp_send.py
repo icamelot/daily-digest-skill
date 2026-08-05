@@ -38,6 +38,16 @@ class PreparedAttachment:
     cleanup_eligible: bool
 
 
+@dataclass(frozen=True)
+class _AttachmentMetadata:
+    path: Path
+    filename: str
+    declared_size: int
+    device: int
+    inode: int
+    cleanup_eligible: bool
+
+
 def _normalize_attachment_paths(attachments: AttachmentInput) -> tuple[Path, ...]:
     if attachments is None:
         return ()
@@ -75,38 +85,87 @@ def prepare_attachments(
     ):
         raise AttachmentValidationError("max_attachment_bytes must be a non-negative integer")
 
-    paths = _normalize_attachment_paths(attachments)
-    prepared = []
-    total = 0
     cleanup_root = TELEGRAM_FILES_ROOT.resolve(strict=False)
-    for source in paths:
+    metadata = []
+    declared_total = 0
+    for source in _normalize_attachment_paths(attachments):
         try:
             file_stat = source.lstat()
-            canonical = source.resolve(strict=True)
-            content = canonical.read_bytes()
         except OSError as exc:
-            raise AttachmentValidationError(f"attachment is not readable: {source.name}") from exc
+            raise AttachmentValidationError(
+                f"attachment does not exist: {source.name}"
+            ) from exc
         if stat.S_ISLNK(file_stat.st_mode):
-            raise AttachmentValidationError(f"attachment symbolic links are not allowed: {source.name}")
+            raise AttachmentValidationError(
+                f"attachment symbolic links are not allowed: {source.name}"
+            )
         if not stat.S_ISREG(file_stat.st_mode):
-            raise AttachmentValidationError(f"attachment is not a regular file: {source.name}")
-        total += len(content)
-        if total > max_attachment_bytes:
+            raise AttachmentValidationError(
+                f"attachment is not a regular file: {source.name}"
+            )
+        try:
+            canonical = source.resolve(strict=True)
+        except OSError as exc:
+            raise AttachmentValidationError(
+                f"attachment does not exist: {source.name}"
+            ) from exc
+        declared_total += file_stat.st_size
+        if declared_total > max_attachment_bytes:
             raise AttachmentValidationError(
                 f"attachments exceed raw size limit of {max_attachment_bytes} bytes"
             )
-        maintype, subtype = _mime_parts(source.name)
+        metadata.append(_AttachmentMetadata(
+            path=canonical,
+            filename=source.name,
+            declared_size=file_stat.st_size,
+            device=file_stat.st_dev,
+            inode=file_stat.st_ino,
+            cleanup_eligible=_is_strictly_below(canonical, cleanup_root),
+        ))
+
+    prepared = []
+    actual_total = 0
+    for item in metadata:
+        descriptor = None
+        try:
+            descriptor = os.open(item.path, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(descriptor, "rb") as source_file:
+                descriptor = None
+                before = os.fstat(source_file.fileno())
+                content = source_file.read()
+                after = os.fstat(source_file.fileno())
+        except OSError as exc:
+            raise AttachmentValidationError(
+                f"attachment is not readable: {item.filename}"
+            ) from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+        expected_identity = (item.device, item.inode)
+        if (
+            (before.st_dev, before.st_ino) != expected_identity
+            or (after.st_dev, after.st_ino) != expected_identity
+        ):
+            raise AttachmentValidationError(
+                f"attachment changed while being read: {item.filename}"
+            )
+        actual_total += len(content)
+        if actual_total > max_attachment_bytes:
+            raise AttachmentValidationError(
+                f"attachments exceed raw size limit of {max_attachment_bytes} bytes"
+            )
+        maintype, subtype = _mime_parts(item.filename)
         prepared.append(
             PreparedAttachment(
-                path=canonical,
-                filename=source.name,
+                path=item.path,
+                filename=item.filename,
                 size=len(content),
                 maintype=maintype,
                 subtype=subtype,
                 content=content,
-                device=file_stat.st_dev,
-                inode=file_stat.st_ino,
-                cleanup_eligible=_is_strictly_below(canonical, cleanup_root),
+                device=item.device,
+                inode=item.inode,
+                cleanup_eligible=item.cleanup_eligible,
             )
         )
     return tuple(prepared)

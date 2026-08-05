@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "mail" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -106,3 +107,95 @@ class TestBuildEmailMessage(unittest.TestCase):
 
         self.assertEqual(len(attachment_parts(message)), 2)
         self.assertEqual([item.size for item in prepared], [3, 3])
+
+
+class TestPrepareAttachments(unittest.TestCase):
+    def assert_invalid(self, attachments, limit=smtp_send.DEFAULT_MAX_ATTACHMENT_BYTES):
+        with self.assertRaises(smtp_send.AttachmentValidationError):
+            smtp_send.prepare_attachments(attachments, limit)
+
+    def test_none_empty_and_zero_byte_at_zero_limit(self):
+        self.assertEqual(smtp_send.prepare_attachments(None), ())
+        self.assertEqual(smtp_send.prepare_attachments([]), ())
+        with tempfile.TemporaryDirectory() as directory:
+            empty = Path(directory) / "empty.bin"
+            empty.write_bytes(b"")
+            result = smtp_send.prepare_attachments(empty, 0)
+        self.assertEqual(result[0].size, 0)
+
+    def test_invalid_container_element_and_limits(self):
+        self.assert_invalid(iter(["file.txt"]))
+        self.assert_invalid([123])
+        for invalid_limit in (-1, 1.5, True, "20"):
+            with self.subTest(limit=invalid_limit):
+                self.assert_invalid([], invalid_limit)
+
+    def test_missing_directory_and_symlink_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target.txt"
+            target.write_text("safe")
+            link = root / "link.txt"
+            link.symlink_to(target)
+            self.assert_invalid(root / "missing.txt")
+            self.assert_invalid(root)
+            self.assert_invalid(link)
+
+    def test_declared_aggregate_limit_counts_repeats(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "three.bin"
+            path.write_bytes(b"123")
+            self.assertEqual(len(smtp_send.prepare_attachments([path, path], 6)), 2)
+            self.assert_invalid([path, path], 5)
+
+    def test_unreadable_open_is_translated_without_leaking_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "private.txt"
+            path.write_text("do-not-print")
+            original_open = os.open
+
+            def fail_target(candidate, *args, **kwargs):
+                if Path(candidate).resolve() == path.resolve():
+                    raise PermissionError("do-not-print")
+                return original_open(candidate, *args, **kwargs)
+
+            with patch.object(smtp_send.os, "open", side_effect=fail_target):
+                with self.assertRaisesRegex(
+                    smtp_send.AttachmentValidationError,
+                    r"attachment is not readable: private\.txt",
+                ) as caught:
+                    smtp_send.prepare_attachments(path)
+        self.assertNotIn("do-not-print", str(caught.exception))
+        self.assertNotIn(str(path.parent), str(caught.exception))
+
+    def test_identity_change_during_read_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "moving.bin"
+            path.write_bytes(b"abc")
+            real_fstat = os.fstat
+
+            def changed_identity(fd):
+                current = real_fstat(fd)
+                values = list(current)
+                values[1] = current.st_ino + 1
+                return os.stat_result(values)
+
+            with patch.object(smtp_send.os, "fstat", side_effect=changed_identity):
+                self.assert_invalid(path)
+
+    def test_growth_after_metadata_pass_is_checked_against_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "growing.bin"
+            path.write_bytes(b"1234")
+            real_lstat = Path.lstat
+
+            def smaller_metadata(candidate):
+                current = real_lstat(candidate)
+                if candidate == path:
+                    values = list(current)
+                    values[6] = 2
+                    return os.stat_result(values)
+                return current
+
+            with patch.object(Path, "lstat", autospec=True, side_effect=smaller_metadata):
+                self.assert_invalid(path, 3)
