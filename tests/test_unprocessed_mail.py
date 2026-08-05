@@ -5,7 +5,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from importlib.util import module_from_spec, spec_from_file_location
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parent.parent / "mail" / "scripts" / "unprocessed_mail.py"
 
@@ -13,6 +17,10 @@ SCRIPT = Path(__file__).resolve().parent.parent / "mail" / "scripts" / "unproces
 _TMPDIR = tempfile.mkdtemp()
 _STATE_PATH = os.path.join(_TMPDIR, ".unprocessed_emails.json")
 os.environ["_UNPROCESSED_TEST_STATE"] = _STATE_PATH
+
+_SPEC = spec_from_file_location("unprocessed_mail_under_test", SCRIPT)
+_MODULE = module_from_spec(_SPEC)
+_SPEC.loader.exec_module(_MODULE)
 
 
 def _run(*args, stdin_str=None):
@@ -189,18 +197,21 @@ class TestMarkAllDone(unittest.TestCase):
         ])
 
     def test_mark_all_done_clears_list(self):
-        """--mark-all-done clears the unprocessed list (IMAP part may fail w/o creds)."""
-        code, out, err = _run("--mark-all-done")
-        if code != 0:
-            self.assertIn("Error", err)
-        else:
-            data = json.loads(out)
-            self.assertIn("imap_marked_seen", data)
-            self.assertIn("unprocessed_cleared", data)
-            # After mark-all-done, list should be empty
-            code2, out2, _ = _run("--summary")
-            summary = json.loads(out2)
-            self.assertEqual(summary["total"], 0)
+        """--mark-all-done clears state without contacting configured IMAP servers."""
+        stdout = StringIO()
+        with (
+            patch.object(_MODULE, "_load_config", return_value={"mail": {"accounts": []}}),
+            patch.object(_MODULE, "_imap_mark_all_seen", return_value=2),
+            redirect_stdout(stdout),
+        ):
+            _MODULE.cmd_mark_all_done()
+
+        data = json.loads(stdout.getvalue())
+        self.assertEqual(data["imap_marked_seen"], 2)
+        self.assertEqual(data["unprocessed_cleared"], 2)
+        code, out, _ = _run("--summary")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["total"], 0)
 
 
 class TestSyncSeen(unittest.TestCase):
@@ -212,13 +223,16 @@ class TestSyncSeen(unittest.TestCase):
         ])
 
     def test_sync_seen_output_structure(self):
-        code, out, err = _run("--sync-seen")
-        if code != 0:
-            self.assertIn("Error", err)
-        else:
-            data = json.loads(out)
-            self.assertIn("removed", data)
-            self.assertIn("total", data)
+        stdout = StringIO()
+        with (
+            patch.object(_MODULE, "_load_config", return_value={"mail": {"accounts": []}}),
+            patch.object(_MODULE, "_imap_get_unseen_uids", return_value={"1"}),
+            redirect_stdout(stdout),
+        ):
+            _MODULE.cmd_sync_seen()
+
+        data = json.loads(stdout.getvalue())
+        self.assertEqual(data, {"removed": 0, "total": 1})
 
 
 if __name__ == "__main__":
