@@ -57,14 +57,18 @@ config 的 `mail.accounts` 是一个数组，每个账户有 `label`（如"工�
 
 [回复] [拉黑发件人] [标记重要]
 
-## 回复邮件
+## 写信与回复邮件
 
-用户说"回复/回这封，大意是..."时：
+用户要求写信或回复时，不自行发送，按以下流程执行：
 
-1. 提取用户意图 + 原邮件上下文
-2. 你（AI agent）生成邮件草稿，展示给用户审阅
-3. 用户确认后调用 `scripts/smtp_send.py` 的 `send_email(config, to, subject, body, from_account_label=..., in_reply_to=...)` 发送。`from_account_label` 默认用收到该邮件的账户
-4. 发送成功后检查 todo 模块是否有相关任务，有则建议标记完成
+1. 提取用户意图；回复时同时读取原邮件上下文，并默认使用收到该邮件的账户作为 `from_account_label`。
+2. 如有附件，先调用 `scripts/smtp_send.py` 的 `prepare_attachments(attachments, max_attachment_bytes=...)` 做草稿阶段校验，不连接 SMTP。默认总上限为 20 MiB（`20 * 1024 * 1024` 原始字节），只有用户指定时才覆盖。
+3. 展示完整草稿：发件账户、收件人、主题和正文。有附件时逐项展示附件名、单个原始大小，并展示附件数量和附件总原始大小；大小标为 KiB/MiB（二进制单位）。不得展示本地目录或附件内容。
+4. 请求覆盖邮件正文和所列附件的明确肯定确认。沉默、歧义回复或旧草稿确认均不算授权。收件人、主题、正文、附件列表、路径、附件名或大小任一变化，都必须重新校验、重新展示草稿并再次确认。
+5. 只有当前草稿获明确确认后，才调用 `send_email(config, to, subject, body, from_account_label=..., in_reply_to=..., references=..., attachments=..., max_attachment_bytes=...)`。`send_email` 会在联网前重新校验全部附件。
+6. 取消时不得调用 send_email；取消或发送失败不得删除任何附件。
+7. `send_email` 返回 `True` 才报告 SMTP 已接受邮件。若同时输出“Email sent; attachment cleanup failed”，必须明确报告“邮件已发送、附件清理失败”及未清理路径，绝不重发；非 `telegram_files` 文件不会自动删除。
+8. 发送成功后检查 todo 模块是否有相关任务，有则建议标记完成。
 
 ## 拉黑管理
 
