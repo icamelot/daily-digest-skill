@@ -295,3 +295,154 @@ class TestSendEmail(unittest.TestCase):
             )
         self.assertIs(result, True)
         connection.send_message.assert_called_once()
+
+
+class TestPostAcceptanceCleanup(unittest.TestCase):
+    def config(self):
+        return {"mail": {"smtp": SMTP_CFG}}
+
+    def test_success_deletes_only_inside_temporary_telegram_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "telegram_files"
+            root.mkdir()
+            inside = root / "inside.txt"
+            outside = Path(directory) / "outside.txt"
+            inside.write_text("inside")
+            outside.write_text("outside")
+            connection = MagicMock()
+            with (
+                patch.object(smtp_send, "TELEGRAM_FILES_ROOT", root),
+                patch.object(smtp_send.smtplib, "SMTP", return_value=connection),
+            ):
+                result = smtp_send.send_email(
+                    self.config(),
+                    "to@example.com",
+                    "subject",
+                    "body",
+                    attachments=[inside, outside],
+                )
+            self.assertTrue(result)
+            self.assertFalse(inside.exists())
+            self.assertTrue(outside.exists())
+            connection.send_message.assert_called_once()
+
+    def test_submission_failure_retains_all_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "telegram_files"
+            root.mkdir()
+            attachment = root / "retain.txt"
+            attachment.write_text("retain")
+            connection = MagicMock()
+            connection.send_message.side_effect = smtplib.SMTPException("rejected")
+            with (
+                patch.object(smtp_send, "TELEGRAM_FILES_ROOT", root),
+                patch.object(smtp_send.smtplib, "SMTP", return_value=connection),
+            ):
+                self.assertFalse(smtp_send.send_email(
+                    self.config(), "to@example.com", "subject", "body", attachments=attachment
+                ))
+            self.assertTrue(attachment.exists())
+
+    def test_replaced_file_is_not_deleted_after_acceptance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "telegram_files"
+            root.mkdir()
+            attachment = root / "replaced.txt"
+            attachment.write_text("original")
+            connection = MagicMock()
+
+            def replace_after_acceptance(_message):
+                attachment.unlink()
+                attachment.write_text("replacement")
+
+            connection.send_message.side_effect = replace_after_acceptance
+            with (
+                patch.object(smtp_send, "TELEGRAM_FILES_ROOT", root),
+                patch.object(smtp_send.smtplib, "SMTP", return_value=connection),
+            ):
+                self.assertTrue(smtp_send.send_email(
+                    self.config(), "to@example.com", "subject", "body", attachments=attachment
+                ))
+            self.assertTrue(attachment.exists())
+            self.assertEqual(attachment.read_text(), "replacement")
+            connection.send_message.assert_called_once()
+
+    def test_missing_file_after_acceptance_is_reported_not_recreated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "telegram_files"
+            root.mkdir()
+            attachment = root / "gone.txt"
+            attachment.write_text("gone")
+            connection = MagicMock()
+            connection.send_message.side_effect = lambda _message: attachment.unlink()
+            with (
+                patch.object(smtp_send, "TELEGRAM_FILES_ROOT", root),
+                patch.object(smtp_send.smtplib, "SMTP", return_value=connection),
+                patch("builtins.print") as report,
+            ):
+                self.assertTrue(smtp_send.send_email(
+                    self.config(), "to@example.com", "subject", "body", attachments=attachment
+                ))
+            self.assertFalse(attachment.exists())
+            self.assertIn("Email sent; attachment cleanup failed", str(report.call_args_list))
+            connection.send_message.assert_called_once()
+
+    def test_quit_error_after_acceptance_still_cleans_eligible_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "telegram_files"
+            root.mkdir()
+            attachment = root / "cleanup.txt"
+            attachment.write_text("cleanup")
+            connection = MagicMock()
+            connection.quit.side_effect = smtplib.SMTPException("quit failed")
+            with (
+                patch.object(smtp_send, "TELEGRAM_FILES_ROOT", root),
+                patch.object(smtp_send.smtplib, "SMTP", return_value=connection),
+            ):
+                self.assertTrue(smtp_send.send_email(
+                    self.config(), "to@example.com", "subject", "body", attachments=attachment
+                ))
+            self.assertFalse(attachment.exists())
+            connection.send_message.assert_called_once()
+
+    def test_partial_cleanup_failure_reports_sent_and_never_resends(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "telegram_files"
+            root.mkdir()
+            blocked = root / "blocked.txt"
+            deleted = root / "deleted.txt"
+            blocked.write_text("blocked")
+            deleted.write_text("deleted")
+            connection = MagicMock()
+            real_unlink = Path.unlink
+
+            def selective_unlink(candidate, *args, **kwargs):
+                if candidate == blocked.resolve():
+                    raise PermissionError("denied")
+                return real_unlink(candidate, *args, **kwargs)
+
+            with (
+                patch.object(smtp_send, "TELEGRAM_FILES_ROOT", root),
+                patch.object(smtp_send.smtplib, "SMTP", return_value=connection),
+                patch.object(Path, "unlink", autospec=True, side_effect=selective_unlink) as unlink,
+                patch("builtins.print") as report,
+            ):
+                result = smtp_send.send_email(
+                    self.config(),
+                    "to@example.com",
+                    "subject",
+                    "body",
+                    attachments=[blocked, deleted, blocked],
+                )
+            self.assertIs(result, True)
+            self.assertTrue(blocked.exists())
+            self.assertFalse(deleted.exists())
+            connection.send_message.assert_called_once()
+            rendered = " ".join(str(call) for call in report.call_args_list)
+            self.assertIn("Email sent; attachment cleanup failed", rendered)
+            self.assertIn(str(blocked.resolve()), rendered)
+            blocked_unlinks = [
+                call for call in unlink.call_args_list
+                if call.args[0] == blocked.resolve()
+            ]
+            self.assertEqual(len(blocked_unlinks), 1)

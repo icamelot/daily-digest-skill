@@ -39,6 +39,7 @@ class PreparedAttachment:
     content: bytes
     device: int
     inode: int
+    ctime_ns: int
     cleanup_eligible: bool
 
 
@@ -49,6 +50,7 @@ class _AttachmentMetadata:
     declared_size: int
     device: int
     inode: int
+    ctime_ns: int
     cleanup_eligible: bool
 
 
@@ -124,6 +126,7 @@ def prepare_attachments(
             declared_size=file_stat.st_size,
             device=file_stat.st_dev,
             inode=file_stat.st_ino,
+            ctime_ns=file_stat.st_ctime_ns,
             cleanup_eligible=_is_strictly_below(canonical, cleanup_root),
         ))
 
@@ -145,10 +148,10 @@ def prepare_attachments(
         finally:
             if descriptor is not None:
                 os.close(descriptor)
-        expected_identity = (item.device, item.inode)
+        expected_identity = (item.device, item.inode, item.ctime_ns)
         if (
-            (before.st_dev, before.st_ino) != expected_identity
-            or (after.st_dev, after.st_ino) != expected_identity
+            (before.st_dev, before.st_ino, before.st_ctime_ns) != expected_identity
+            or (after.st_dev, after.st_ino, after.st_ctime_ns) != expected_identity
         ):
             raise AttachmentValidationError(
                 f"attachment changed while being read: {item.filename}"
@@ -169,6 +172,7 @@ def prepare_attachments(
                 content=content,
                 device=item.device,
                 inode=item.inode,
+                ctime_ns=item.ctime_ns,
                 cleanup_eligible=item.cleanup_eligible,
             )
         )
@@ -227,6 +231,36 @@ def _select_smtp_config(config: dict, from_account_label: str | None) -> dict:
         raise MailConfigurationError("SMTP account configuration is missing or malformed") from exc
 
 
+def _cleanup_sent_attachments(
+    prepared: tuple[PreparedAttachment, ...],
+) -> tuple[Path, ...]:
+    cleanup_root = TELEGRAM_FILES_ROOT.resolve(strict=False)
+    failures = []
+    seen = set()
+    for item in prepared:
+        if item.path in seen:
+            continue
+        seen.add(item.path)
+        if not item.cleanup_eligible:
+            continue
+        try:
+            current = item.path.lstat()
+            canonical = item.path.resolve(strict=True)
+            if (
+                stat.S_ISLNK(current.st_mode)
+                or not stat.S_ISREG(current.st_mode)
+                or not _is_strictly_below(canonical, cleanup_root)
+                or (current.st_dev, current.st_ino, current.st_ctime_ns)
+                != (item.device, item.inode, item.ctime_ns)
+            ):
+                failures.append(item.path)
+                continue
+            canonical.unlink()
+        except OSError:
+            failures.append(item.path)
+    return tuple(failures)
+
+
 def send_email(
     config: dict,
     to: str,
@@ -241,7 +275,7 @@ def send_email(
     """Send one message; True means send_message() returned normally."""
     try:
         smtp_cfg = _select_smtp_config(config, from_account_label)
-        message, _prepared = build_email_message(
+        message, prepared = build_email_message(
             smtp_cfg,
             to,
             subject,
@@ -280,4 +314,8 @@ def send_email(
     if not accepted:
         print(f"SMTP send failed: {send_error}")
         return False
+    cleanup_failures = _cleanup_sent_attachments(prepared)
+    if cleanup_failures:
+        paths = ", ".join(str(path) for path in cleanup_failures)
+        print(f"Email sent; attachment cleanup failed: {paths}; do not resend")
     return True
