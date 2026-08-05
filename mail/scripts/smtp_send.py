@@ -25,6 +25,10 @@ class AttachmentValidationError(ValueError):
     """The complete attachment set is unsafe or cannot be prepared."""
 
 
+class MailConfigurationError(ValueError):
+    """The SMTP account configuration is missing or malformed."""
+
+
 @dataclass(frozen=True)
 class PreparedAttachment:
     path: Path
@@ -201,6 +205,28 @@ def build_email_message(
     return msg, prepared
 
 
+def _select_smtp_config(config: dict, from_account_label: str | None) -> dict:
+    try:
+        accounts = config.get("mail", {}).get("accounts", [])
+        if accounts:
+            if from_account_label:
+                for account in accounts:
+                    if account.get("label") == from_account_label:
+                        smtp_cfg = account["smtp"]
+                        break
+                else:
+                    smtp_cfg = accounts[0]["smtp"]
+            else:
+                smtp_cfg = accounts[0]["smtp"]
+        else:
+            smtp_cfg = config["mail"]["smtp"]
+        if any(key not in smtp_cfg for key in ("server", "port", "username", "password")):
+            raise KeyError("incomplete SMTP config")
+        return smtp_cfg
+    except (AttributeError, IndexError, KeyError, TypeError) as exc:
+        raise MailConfigurationError("SMTP account configuration is missing or malformed") from exc
+
+
 def send_email(
     config: dict,
     to: str,
@@ -209,49 +235,49 @@ def send_email(
     from_account_label: str | None = None,
     in_reply_to: str | None = None,
     references: str | None = None,
+    attachments: AttachmentInput = None,
+    max_attachment_bytes: int = DEFAULT_MAX_ATTACHMENT_BYTES,
 ) -> bool:
-    """
-    Send an email via SMTP. Returns True on success.
-    from_account_label: match against account labels in config.
-    If None, uses the first account.
-    Set in_reply_to and references for threaded replies.
-    """
-    accounts = config.get("mail", {}).get("accounts", [])
-    if accounts:
-        smtp_cfg = None
-        if from_account_label:
-            for acc in accounts:
-                if acc.get("label") == from_account_label:
-                    smtp_cfg = acc["smtp"]
-                    break
-        if smtp_cfg is None:
-            smtp_cfg = accounts[0]["smtp"]
-    else:
-        # Fallback: old single-account format
-        smtp_cfg = config["mail"]["smtp"]
+    """Send one message; True means send_message() returned normally."""
+    try:
+        smtp_cfg = _select_smtp_config(config, from_account_label)
+        message, _prepared = build_email_message(
+            smtp_cfg,
+            to,
+            subject,
+            body,
+            in_reply_to=in_reply_to,
+            references=references,
+            attachments=attachments,
+            max_attachment_bytes=max_attachment_bytes,
+        )
+    except (AttachmentValidationError, MailConfigurationError, KeyError) as exc:
+        print(f"Email preparation failed: {exc}")
+        return False
 
-    msg = MIMEMultipart()
-    msg["From"] = smtp_cfg["username"]
-    msg["To"] = to
-    msg["Subject"] = subject
-    msg["Date"] = formatdate(localtime=True)
-    if in_reply_to:
-        msg["In-Reply-To"] = in_reply_to
-    if references:
-        msg["References"] = references
-
-    msg.attach(MIMEText(body, "plain", "utf-8"))
-
+    connection = None
+    accepted = False
+    send_error = None
     try:
         if smtp_cfg["port"] == 465:
-            conn = smtplib.SMTP_SSL(smtp_cfg["server"], smtp_cfg["port"])
+            connection = smtplib.SMTP_SSL(smtp_cfg["server"], smtp_cfg["port"])
         else:
-            conn = smtplib.SMTP(smtp_cfg["server"], smtp_cfg["port"])
-            conn.starttls()
-        conn.login(smtp_cfg["username"], smtp_cfg["password"])
-        conn.send_message(msg)
-        conn.quit()
-        return True
-    except smtplib.SMTPException as e:
-        print(f"SMTP send failed: {e}")
+            connection = smtplib.SMTP(smtp_cfg["server"], smtp_cfg["port"])
+            connection.starttls()
+        connection.login(smtp_cfg["username"], smtp_cfg["password"])
+        connection.send_message(message)
+        accepted = True
+    except (OSError, smtplib.SMTPException) as exc:
+        send_error = exc
+    finally:
+        if connection is not None:
+            try:
+                connection.quit()
+            except (OSError, smtplib.SMTPException) as exc:
+                if accepted:
+                    print(f"Email accepted; SMTP teardown failed: {exc}")
+
+    if not accepted:
+        print(f"SMTP send failed: {send_error}")
         return False
+    return True

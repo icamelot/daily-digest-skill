@@ -1,11 +1,12 @@
 """Unit tests for outbound SMTP message construction and delivery."""
 import email
 import os
+import smtplib
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "mail" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -199,3 +200,98 @@ class TestPrepareAttachments(unittest.TestCase):
 
             with patch.object(Path, "lstat", autospec=True, side_effect=smaller_metadata):
                 self.assert_invalid(path, 3)
+
+
+class TestSendEmail(unittest.TestCase):
+    def account_config(self, port=587):
+        return {"mail": {"accounts": [{"label": "work", "smtp": {**SMTP_CFG, "port": port}}]}}
+
+    def test_old_call_shape_uses_starttls_and_returns_real_bool(self):
+        connection = MagicMock()
+        with patch.object(smtp_send.smtplib, "SMTP", return_value=connection) as constructor:
+            result = smtp_send.send_email(
+                self.account_config(), "to@example.com", "subject", "body"
+            )
+        self.assertIs(result, True)
+        constructor.assert_called_once_with("smtp.example.com", 587)
+        connection.starttls.assert_called_once_with()
+        connection.login.assert_called_once_with("sender@example.com", "secret")
+        connection.send_message.assert_called_once()
+        connection.quit.assert_called_once_with()
+
+    def test_port_465_label_selection_uses_ssl_and_new_attachment_arguments(self):
+        selected = {**SMTP_CFG, "port": 465, "username": "work@example.com"}
+        config = {"mail": {"accounts": [
+            {"label": "personal", "smtp": SMTP_CFG},
+            {"label": "work", "smtp": selected},
+        ]}}
+        connection = MagicMock()
+        with tempfile.TemporaryDirectory() as directory:
+            attachment = Path(directory) / "note.txt"
+            attachment.write_text("hello")
+            with patch.object(smtp_send.smtplib, "SMTP_SSL", return_value=connection) as constructor:
+                result = smtp_send.send_email(
+                    config,
+                    "to@example.com",
+                    "subject",
+                    "body",
+                    from_account_label="work",
+                    attachments=attachment,
+                    max_attachment_bytes=5,
+                )
+        self.assertIs(result, True)
+        constructor.assert_called_once_with("smtp.example.com", 465)
+        connection.starttls.assert_not_called()
+        sent = connection.send_message.call_args.args[0]
+        self.assertEqual(sent["From"], "work@example.com")
+        self.assertEqual(len(attachment_parts(sent)), 1)
+
+    def test_unknown_label_falls_back_to_first_and_legacy_config_still_works(self):
+        for config, label in (
+            (self.account_config(), "missing"),
+            ({"mail": {"smtp": SMTP_CFG}}, None),
+        ):
+            with self.subTest(config=config):
+                connection = MagicMock()
+                with patch.object(smtp_send.smtplib, "SMTP", return_value=connection):
+                    self.assertTrue(smtp_send.send_email(
+                        config, "to@example.com", "subject", "body", from_account_label=label
+                    ))
+                self.assertEqual(connection.send_message.call_args.args[0]["From"], "sender@example.com")
+
+    def test_validation_and_configuration_fail_before_smtp_constructor(self):
+        with patch.object(smtp_send.smtplib, "SMTP") as constructor:
+            self.assertFalse(smtp_send.send_email(
+                self.account_config(),
+                "to@example.com",
+                "subject",
+                "body",
+                attachments="missing.txt",
+            ))
+            self.assertFalse(smtp_send.send_email({}, "to@example.com", "subject", "body"))
+        constructor.assert_not_called()
+
+    def test_connection_tls_login_and_submission_errors_return_false(self):
+        stages = ("constructor", "starttls", "login", "send_message")
+        for stage in stages:
+            with self.subTest(stage=stage):
+                connection = MagicMock()
+                constructor = MagicMock(return_value=connection)
+                if stage == "constructor":
+                    constructor.side_effect = OSError("offline")
+                else:
+                    getattr(connection, stage).side_effect = smtplib.SMTPException(stage)
+                with patch.object(smtp_send.smtplib, "SMTP", constructor):
+                    self.assertFalse(smtp_send.send_email(
+                        self.account_config(), "to@example.com", "subject", "body"
+                    ))
+
+    def test_quit_error_after_acceptance_still_returns_true_and_sends_once(self):
+        connection = MagicMock()
+        connection.quit.side_effect = smtplib.SMTPException("quit failed")
+        with patch.object(smtp_send.smtplib, "SMTP", return_value=connection):
+            result = smtp_send.send_email(
+                self.account_config(), "to@example.com", "subject", "body"
+            )
+        self.assertIs(result, True)
+        connection.send_message.assert_called_once()
